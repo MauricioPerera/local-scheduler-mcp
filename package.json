@@ -1,0 +1,13 @@
+{
+  "name": "local-scheduler-mcp",
+  "version": "3.0.0",
+  "description": "Local scheduler MCP server for Codex",
+  "main": "server.js",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.23.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
