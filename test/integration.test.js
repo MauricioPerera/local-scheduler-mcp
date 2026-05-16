@@ -158,6 +158,8 @@ describe('integration: MCP stdio protocol', () => {
     assert.ok(delRes.result.content[0].text.includes("Deleted"));
 
 
+  });
+
 it('rejects dangerous command via MCP', async () => {
   sendJsonRpc(proc, {
     jsonrpc: '2.0', id: 90, method: 'tools/call',
@@ -191,4 +193,3 @@ it('rejects forbidden cwd via MCP', async () => {
   assert.ok(res.result.isError);
 });
   });
-});

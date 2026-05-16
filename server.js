@@ -1,4 +1,5 @@
 
+const lib = require('./lib.js');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -9,7 +10,7 @@ const z = require("zod/v4");
 
 const {
   ensureDirs, loadState, resetState,
-  automations, tasks, config, lastAck,
+  automations, tasks, config,
   save, saveTasks, saveConfig, saveAck,
   appendNotification, readNotifications, getPendingCount,
   sendHttpNotification, resolveCommand, validateTask,
@@ -115,7 +116,7 @@ server.tool('check_notifications', 'Check pending notifications since last ack o
   since: z.string().optional().describe('ISO timestamp to filter from (overrides last ack)'),
   limit: z.number().optional().describe('Max notifications to return')
 }, TASK_ALLOWED, async (args) => {
-  const since = args.since ? new Date(args.since).getTime() : lastAck;
+  const since = args.since ? new Date(args.since).getTime() : lib.lastAck;
   const notifs = readNotifications(since, args.limit || 50);
   return { content: [{ type: 'text', text: JSON.stringify(notifs, null, 2) }] };
 });
@@ -124,11 +125,11 @@ server.tool('ack_notifications', 'Acknowledge all notifications up to a timestam
   upTo: z.string().describe('Acknowledge all notifications up to this ISO timestamp')
 }, TASK_ALLOWED, async (args) => {
   const ts = new Date(args.upTo).getTime();
-  if (ts > lastAck) {
-    lastAck = ts;
+  if (ts > lib.lastAck) {
+    lib.lastAck = ts;
     saveAck();
   }
-  return { content: [{ type: 'text', text: 'Acknowledged up to ' + args.upTo + '. Remaining pending: ' + getPendingCount() }] };
+  return { content: [{ type: 'text', text: 'Acknowledged up to ' + args.upTo + '. Remaining pending: ' + lib.getPendingCount() }] };
 });
 
 server.tool('set_webhook', 'Set a webhook URL for push notifications', {
@@ -141,7 +142,7 @@ server.tool('set_webhook', 'Set a webhook URL for push notifications', {
 
 server.tool('get_pending_summary', 'Get a one-line summary of pending notifications for quick status checks', {}, TASK_ALLOWED, async () => {
   const pending = getPendingCount();
-  const notifs = readNotifications(lastAck, 10);
+  const notifs = readNotifications(lib.lastAck, 10);
   const byAutomation = {};
   for (const n of notifs) {
     const name = n.automationName || n.taskName; byAutomation[name] = (byAutomation[name] || 0) + 1;
