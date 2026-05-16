@@ -272,5 +272,5 @@ setInterval(() => {
 
 const transport = new StdioServerTransport();
 server.connect(transport).then(() => {
-  console.error('Local Scheduler MCP v2.9.0 started on stdio');
+  console.error('Local Scheduler MCP v3.0.0 started on stdio');
 });
