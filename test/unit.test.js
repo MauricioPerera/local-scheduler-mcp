@@ -261,6 +261,26 @@ describe('security validation', () => {
       assert.strictEqual(r.command, 'echo hi ${other}');
     });
 
+    it('rejects shell injection in interpolated params', () => {
+      const t = { id: 'x', command: 'echo ${msg}' };
+      const r = lib.interpolateTemplate(t, { msg: "hello'; rm -rf /" });
+      assert.strictEqual(r.errors.length, 1);
+      assert.ok(r.errors[0].includes('forbidden shell characters'));
+    });
+
+    it('reports missing required params', () => {
+      const t = { id: 'x', command: 'cd ${repoPath} && dotnet build', requiredParams: ['repoPath'] };
+      const r = lib.interpolateTemplate(t, {});
+      assert.deepStrictEqual(r.missing, ['repoPath']);
+      assert.strictEqual(r.errors.length, 0);
+    });
+
+    it('allows safe path characters in interpolation', () => {
+      const t = { id: 'x', command: 'cd ${path} && dotnet build' };
+      const r = lib.interpolateTemplate(t, { path: 'D:/repos/SnakeGame' });
+      assert.strictEqual(r.command, 'cd D:/repos/SnakeGame && dotnet build');
+      assert.strictEqual(r.errors.length, 0);
+    });
     it('loads custom templates from templates.json', () => {
       lib.ensureDirs();
       const custom = [{ id: 'custom-a', name: 'Custom A', description: 'test', defaultInterval: 10, command: 'echo a' }];

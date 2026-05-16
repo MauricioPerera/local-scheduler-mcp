@@ -98,8 +98,23 @@ server.tool('instantiate_template', 'Create an automation from a pre-defined tem
   if (!t) {
     return { content: [{ type: 'text', text: 'Template not found: ' + args.templateId }], isError: true };
   }
-  const params = args.params ? JSON.parse(args.params) : {};
-  const { command, script } = interpolateTemplate(t, params);
+  let params = {};
+  if (args.params) {
+    try {
+      params = JSON.parse(args.params);
+    } catch (e) {
+      return { content: [{ type: 'text', text: 'Invalid JSON in params: ' + e.message }], isError: true };
+    }
+  }
+  const interp = interpolateTemplate(t, params);
+  if (interp.missing.length > 0) {
+    return { content: [{ type: 'text', text: 'Missing required params: ' + interp.missing.join(', ') }], isError: true };
+  }
+  if (interp.errors.length > 0) {
+    return { content: [{ type: 'text', text: 'Interpolation errors: ' + interp.errors.join('; ') }], isError: true };
+  }
+  const command = interp.command;
+  const script = interp.script;
   const automationArgs = {
     name: args.name || t.name,
     intervalMinutes: args.intervalMinutes || t.defaultInterval || 60,

@@ -35,7 +35,8 @@ const BUILTIN_TEMPLATES = [
     description: 'Run dotnet build in a project directory every N minutes.',
     defaultInterval: 60,
     scriptType: 'powershell',
-    command: 'dotnet build'
+    command: 'dotnet build',
+    requiredParams: []
   },
   {
     id: 'disk-check',
@@ -43,7 +44,8 @@ const BUILTIN_TEMPLATES = [
     description: 'Check available disk space every N minutes.',
     defaultInterval: 5,
     scriptType: 'powershell',
-    command: 'Get-PSDrive C | Select-Object Used,Free'
+    command: 'Get-PSDrive C | Select-Object Used,Free',
+    requiredParams: []
   },
   {
     id: 'git-sync',
@@ -51,7 +53,8 @@ const BUILTIN_TEMPLATES = [
     description: 'Pull latest changes from git remote every N minutes.',
     defaultInterval: 30,
     scriptType: 'powershell',
-    command: 'git pull'
+    command: 'git pull',
+    requiredParams: []
   }
 ];
 
@@ -75,17 +78,46 @@ function loadTemplates() {
 
 function listTemplates() { return [...templates]; }
 function getTemplate(id) { return templates.find(t => t.id === id); }
+const SAFE_INTERPOLATED = /^[a-zA-Z0-9_\-\/:. ~]+$/;
+
+function validateInterpolationValue(v) {
+  if (!SAFE_INTERPOLATED.test(String(v))) {
+    return { ok: false, reason: 'Interpolated value contains forbidden shell characters' };
+  }
+  return { ok: true };
+}
+
 function interpolateTemplate(t, params) {
   let command = t.command || null;
   let script = t.script || null;
+  const missing = [];
+  const errors = [];
+
+  if (t.requiredParams && Array.isArray(t.requiredParams)) {
+    for (const k of t.requiredParams) {
+      if (!params || params[k] === undefined) {
+        missing.push(k);
+      }
+    }
+  }
+
+  if (missing.length > 0) {
+    return { command, script, missing, errors };
+  }
+
   if (params && typeof params === 'object') {
     for (const [k, v] of Object.entries(params)) {
+      const valCheck = validateInterpolationValue(v);
+      if (!valCheck.ok) {
+        errors.push('param "' + k + '": ' + valCheck.reason);
+        continue;
+      }
       const placeholder = '${' + k + '}';
       if (command) command = command.split(placeholder).join(String(v));
       if (script) script = script.split(placeholder).join(String(v));
     }
   }
-  return { command, script };
+  return { command, script, missing, errors };
 }
 
 // Opt 5: write to .tmp then rename for atomicity
