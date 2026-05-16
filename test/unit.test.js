@@ -41,22 +41,22 @@ describe('lib.js unit tests', () => {
 
   describe('save and load', () => {
     it('saves and loads automations', () => {
-      lib.automations.push({ id: 'a1', name: 'test', intervalMinutes: 5, nextRun: Date.now(), logs: [] });
+      lib.addAutomation({ id: 'a1', name: 'test', intervalMinutes: 5, nextRun: Date.now(), logs: [] });
       lib.save();
       lib.resetState();
       lib.loadState();
-      assert.strictEqual(lib.automations.length, 1);
-      assert.strictEqual(lib.automations[0].id, 'a1');
+      assert.strictEqual(lib.listAutomations().length, 1);
+      assert.strictEqual(lib.listAutomations()[0].id, 'a1');
     });
 
     it('saves and loads tasks', () => {
       lib.resetState();
-      lib.tasks.push({ id: 't1', name: 'task', status: 'running' });
+      lib.addTask({ id: 't1', name: 'task', status: 'running' });
       lib.saveTasks();
       lib.resetState();
       lib.loadState();
-      assert.strictEqual(lib.tasks.length, 1);
-      assert.strictEqual(lib.tasks[0].status, 'running');
+      assert.strictEqual(lib.listTasks().length, 1);
+      assert.strictEqual(lib.listTasks()[0].status, 'running');
     });
 
     it('saves and loads config', () => {
@@ -154,7 +154,7 @@ describe('lib.js unit tests', () => {
       const result = lib.resolveCommand({ command: 'echo hi' });
       assert.strictEqual(result.cwd, undefined);
     });
-  
+
 describe('security validation', () => {
   it('blocks rm -rf /', () => {
     const result = lib.validateCommand('rm -rf /');
@@ -229,17 +229,62 @@ describe('security validation', () => {
 });
 });
 
+  describe('templates', () => {
+    it('loads built-in templates', () => {
+      lib.loadTemplates();
+      const list = lib.listTemplates();
+      assert.ok(list.length >= 3, 'Expected at least 3 built-in templates');
+      const ids = list.map(t => t.id);
+      assert.ok(ids.includes('build-project'));
+      assert.ok(ids.includes('disk-check'));
+      assert.ok(ids.includes('git-sync'));
+    });
+
+    it('gets a template by id', () => {
+      lib.loadTemplates();
+      const t = lib.getTemplate('build-project');
+      assert.ok(t);
+      assert.strictEqual(t.id, 'build-project');
+      assert.strictEqual(t.name, 'Build project');
+    });
+
+    it('interpolates params in command', () => {
+      const t = { id: 'x', command: 'echo ${msg}', script: 'console.log("${msg}")', scriptType: 'javascript' };
+      const r = lib.interpolateTemplate(t, { msg: 'hello' });
+      assert.strictEqual(r.command, 'echo hello');
+      assert.strictEqual(r.script, 'console.log("hello")');
+    });
+
+    it('interpolates params without replacing missing keys', () => {
+      const t = { id: 'x', command: 'echo ${msg} ${other}' };
+      const r = lib.interpolateTemplate(t, { msg: 'hi' });
+      assert.strictEqual(r.command, 'echo hi ${other}');
+    });
+
+    it('loads custom templates from templates.json', () => {
+      lib.ensureDirs();
+      const custom = [{ id: 'custom-a', name: 'Custom A', description: 'test', defaultInterval: 10, command: 'echo a' }];
+      fs.writeFileSync(path.join(lib.DATA_DIR, 'templates.json'), JSON.stringify(custom), 'utf8');
+      lib.loadTemplates();
+      const list = lib.listTemplates();
+      assert.ok(list.some(t => t.id === 'custom-a'));
+      assert.ok(list.some(t => t.id === 'build-project'));
+      fs.unlinkSync(path.join(lib.DATA_DIR, 'templates.json'));
+    });
+  });
+
   describe('resetState', () => {
     it('clears all state', () => {
-      lib.automations.push({ id: 'x' });
-      lib.tasks.push({ id: 'y' });
+      lib.addAutomation({ id: 'x' });
+      lib.addTask({ id: 'y' });
       lib.config.foo = 'bar';
       lib.lastAck = 999;
       lib.resetState();
-      assert.strictEqual(lib.automations.length, 0);
-      assert.strictEqual(lib.tasks.length, 0);
+      assert.strictEqual(lib.listAutomations().length, 0);
+      assert.strictEqual(lib.listTasks().length, 0);
       assert.deepStrictEqual(lib.config, {});
       assert.strictEqual(lib.lastAck, 0);
     });
   });
 });
+

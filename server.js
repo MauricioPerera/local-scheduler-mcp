@@ -1,4 +1,3 @@
-
 const lib = require('./lib.js');
 const { exec } = require('child_process');
 const fs = require('fs');
@@ -9,8 +8,11 @@ const { StdioServerTransport } = require("@modelcontextprotocol/sdk/server/stdio
 const z = require("zod/v4");
 
 const {
-  ensureDirs, loadState, resetState,
-  automations, tasks, config,
+  ensureDirs, loadState, loadTemplates,
+  getAutomation, addAutomation, removeAutomation, listAutomations,
+  getTask, addTask, removeTask, listTasks,
+  listTemplates, getTemplate, interpolateTemplate,
+  config,
   save, saveTasks, saveConfig, saveAck,
   appendNotification, readNotifications, getPendingCount,
   sendHttpNotification, resolveCommand, validateTask,
@@ -19,11 +21,12 @@ const {
 
 ensureDirs();
 loadState();
+loadTemplates();
 
 const TASK_ALLOWED = { execution: { taskSupport: 'allowed' } };
 
 const server = new McpServer(
-  { name: 'local-scheduler', version: '3.0.0' },
+  { name: 'local-scheduler', version: '3.1.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -57,7 +60,7 @@ server.tool('create_automation', 'Create a recurring automation. Use \"command\"
     const ext = args.scriptType === 'python' ? '.py' : args.scriptType === 'powershell' ? '.ps1' : '.js';
     fs.writeFileSync(path.join(SCRIPTS_DIR, id + ext), args.script, 'utf8');
   }
-  automations.push({
+  addAutomation({
     id, name: args.name, intervalMinutes: args.intervalMinutes,
     cwd: args.cwd || path.join(require('os').homedir(), '.codex'),
     command: args.command || null,
@@ -71,9 +74,67 @@ server.tool('create_automation', 'Create a recurring automation. Use \"command\"
   return { content: [{ type: 'text', text: 'Created automation ' + id }] };
 });
 
+server.tool('list_templates', 'List available automation templates that can be instantiated.', {}, TASK_ALLOWED, async () => {
+  const items = listTemplates().map(t => ({
+    id: t.id,
+    name: t.name,
+    description: t.description,
+    defaultInterval: t.defaultInterval,
+    scriptType: t.scriptType || null,
+    hasCommand: !!t.command,
+    hasScript: !!t.script
+  }));
+  return { content: [{ type: 'text', text: JSON.stringify(items, null, 2) }] };
+});
+
+server.tool('instantiate_template', 'Create an automation from a pre-defined template. Override interval, cwd, or pass params for interpolation.', {
+  templateId: z.string().describe('Template ID from list_templates'),
+  name: z.string().optional().describe('Automation name (default: template name)'),
+  intervalMinutes: z.number().optional().describe('Interval in minutes (default: template defaultInterval)'),
+  cwd: z.string().optional().describe('Working directory'),
+  params: z.string().optional().describe('JSON string with parameter map for ${key} interpolation')
+}, TASK_ALLOWED, async (args) => {
+  const t = getTemplate(args.templateId);
+  if (!t) {
+    return { content: [{ type: 'text', text: 'Template not found: ' + args.templateId }], isError: true };
+  }
+  const params = args.params ? JSON.parse(args.params) : {};
+  const { command, script } = interpolateTemplate(t, params);
+  const automationArgs = {
+    name: args.name || t.name,
+    intervalMinutes: args.intervalMinutes || t.defaultInterval || 60,
+    cwd: args.cwd,
+    command,
+    script,
+    scriptType: t.scriptType || 'javascript'
+  };
+  const v = validateTask(automationArgs);
+  if (!v.ok) {
+    return { content: [{ type: 'text', text: 'Security error: ' + v.reason }], isError: true };
+  }
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  if (script) {
+    const ext = automationArgs.scriptType === 'python' ? '.py' : automationArgs.scriptType === 'powershell' ? '.ps1' : '.js';
+    fs.writeFileSync(path.join(SCRIPTS_DIR, id + ext), script, 'utf8');
+  }
+  addAutomation({
+    id,
+    name: automationArgs.name,
+    intervalMinutes: automationArgs.intervalMinutes,
+    cwd: automationArgs.cwd || path.join(require('os').homedir(), '.codex'),
+    command: automationArgs.command || null,
+    script: automationArgs.script || null,
+    scriptType: automationArgs.scriptType,
+    nextRun: Date.now(),
+    logs: []
+  });
+  save();
+  return { content: [{ type: 'text', text: 'Created automation ' + id + ' from template ' + t.id }] };
+});
+
 server.tool('list_automations', 'List all automations with pending notification counts', {}, TASK_ALLOWED, async () => {
   const pending = getPendingCount();
-  const list = automations.map(a => ({
+  const list = listAutomations().map(a => ({
     id: a.id,
     name: a.name,
     intervalMinutes: a.intervalMinutes,
@@ -90,24 +151,22 @@ server.tool('list_automations', 'List all automations with pending notification 
 server.tool('delete_automation', 'Delete an automation', {
   id: z.string().describe('Automation ID')
 }, TASK_ALLOWED, async (args) => {
-  const a = automations.find(x => x.id === args.id);
+  const a = getAutomation(args.id);
   if (a && a.script) {
     const ext = a.scriptType === 'python' ? '.py' : a.scriptType === 'powershell' ? '.ps1' : '.js';
     const scriptPath = path.join(SCRIPTS_DIR, a.id + ext);
     try { fs.unlinkSync(scriptPath); } catch {}
   }
-  const before = automations.length;
-  const idxA = automations.findIndex(a => a.id === args.id);
-  if (idxA !== -1) automations.splice(idxA, 1);
+  const deleted = removeAutomation(args.id);
   save();
-  return { content: [{ type: 'text', text: automations.length < before ? 'Deleted' : 'Not found' }] };
+  return { content: [{ type: 'text', text: deleted ? 'Deleted' : 'Not found' }] };
 });
 
 server.tool('get_automation_logs', 'Get run logs', {
   id: z.string().describe('Automation ID'),
   limit: z.number().optional().describe('Max logs to return')
 }, TASK_ALLOWED, async (args) => {
-  const a = automations.find(x => x.id === args.id);
+  const a = getAutomation(args.id);
   const logs = a ? a.logs.slice(-(args.limit || 10)) : [];
   return { content: [{ type: 'text', text: JSON.stringify(logs, null, 2) }] };
 });
@@ -122,17 +181,18 @@ server.tool('check_notifications', 'Check pending notifications since last ack o
 });
 
 server.tool('ack_notifications', 'Acknowledge all notifications up to a timestamp', {
-  upTo: z.string().describe('Acknowledge all notifications up to this ISO timestamp')
+  timestamp: z.number().describe('Timestamp up to which notifications are acknowledged')
 }, TASK_ALLOWED, async (args) => {
-  const ts = new Date(args.upTo).getTime();
+  const ts = args.timestamp;
   if (ts > lib.lastAck) {
     lib.lastAck = ts;
     saveAck();
   }
-  return { content: [{ type: 'text', text: 'Acknowledged up to ' + args.upTo + '. Remaining pending: ' + lib.getPendingCount() }] };
+  const notifs = readNotifications(lib.lastAck, 10);
+  return { content: [{ type: 'text', text: 'Acknowledged up to ' + ts + '. Remaining: ' + notifs.length }] };
 });
 
-server.tool('set_webhook', 'Set a webhook URL for push notifications', {
+server.tool('set_webhook', 'Set the webhook URL for notifications', {
   url: z.string().describe('Webhook URL')
 }, TASK_ALLOWED, async (args) => {
   config.webhookUrl = args.url;
@@ -140,12 +200,13 @@ server.tool('set_webhook', 'Set a webhook URL for push notifications', {
   return { content: [{ type: 'text', text: 'Webhook set to ' + args.url }] };
 });
 
-server.tool('get_pending_summary', 'Get a one-line summary of pending notifications for quick status checks', {}, TASK_ALLOWED, async () => {
+server.tool('get_pending_summary', 'Get a summary of pending notifications grouped by automation', {}, TASK_ALLOWED, async () => {
   const pending = getPendingCount();
-  const notifs = readNotifications(lib.lastAck, 10);
+  const notifs = readNotifications(lib.lastAck, 99999);
   const byAutomation = {};
   for (const n of notifs) {
-    const name = n.automationName || n.taskName; byAutomation[name] = (byAutomation[name] || 0) + 1;
+    const key = n.automationName || n.taskName || 'unknown';
+    byAutomation[key] = (byAutomation[key] || 0) + 1;
   }
   const summary = Object.entries(byAutomation).map(([name, count]) => name + ': ' + count).join('; ');
   return { content: [{ type: 'text', text: pending + ' pending notifications. ' + (summary || 'None') }] };
@@ -185,7 +246,7 @@ server.tool('run_task', 'Run a one-shot background task and return a taskId imme
     stdout: '',
     stderr: ''
   };
-  tasks.push(task);
+  addTask(task);
   saveTasks();
   const { command, cwd } = resolveCommand(task);
   exec(command, { cwd, timeout: args.timeoutMs || 300000 }, (error, stdout, stderr) => {
@@ -210,7 +271,7 @@ server.tool('run_task', 'Run a one-shot background task and return a taskId imme
 server.tool('get_task_status', 'Get the current status and output of a one-shot task', {
   id: z.string().describe('Task ID')
 }, TASK_ALLOWED, async (args) => {
-  const task = tasks.find(t => t.id === args.id);
+  const task = getTask(args.id);
   if (!task) {
     return { content: [{ type: 'text', text: 'Task not found: ' + args.id }], isError: true };
   }
@@ -218,7 +279,7 @@ server.tool('get_task_status', 'Get the current status and output of a one-shot 
 });
 
 server.tool('list_tasks', 'List all one-shot tasks ordered by most recent', {}, TASK_ALLOWED, async () => {
-  const list = tasks.slice().reverse().map(t => ({
+  const list = listTasks().reverse().map(t => ({
     id: t.id,
     name: t.name,
     status: t.status,
@@ -232,23 +293,21 @@ server.tool('list_tasks', 'List all one-shot tasks ordered by most recent', {}, 
 server.tool('delete_task', 'Delete a one-shot task and its script file', {
   id: z.string().describe('Task ID')
 }, TASK_ALLOWED, async (args) => {
-  const t = tasks.find(x => x.id === args.id);
+  const t = getTask(args.id);
   if (t && t.script) {
     const ext = t.scriptType === 'python' ? '.py' : t.scriptType === 'powershell' ? '.ps1' : '.js';
     const scriptPath = path.join(SCRIPTS_DIR, t.id + ext);
     try { fs.unlinkSync(scriptPath); } catch {}
   }
-  const before = tasks.length;
-  const idxT = tasks.findIndex(t => t.id === args.id);
-  if (idxT !== -1) tasks.splice(idxT, 1);
+  const deleted = removeTask(args.id);
   saveTasks();
-  return { content: [{ type: 'text', text: tasks.length < before ? 'Deleted' : 'Not found' }] };
+  return { content: [{ type: 'text', text: deleted ? 'Deleted' : 'Not found' }] };
 });
 
 // Scheduler tick every 30s
 setInterval(() => {
   const now = Date.now();
-  for (const a of automations) {
+  for (const a of listAutomations()) {
     if (now >= a.nextRun) {
       a.nextRun = now + a.intervalMinutes * 60 * 1000;
       save();
@@ -273,5 +332,5 @@ setInterval(() => {
 
 const transport = new StdioServerTransport();
 server.connect(transport).then(() => {
-  console.error('Local Scheduler MCP v3.0.0 started on stdio');
+  console.error('Local Scheduler MCP v3.1.0 started on stdio');
 });

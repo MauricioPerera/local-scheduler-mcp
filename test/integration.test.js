@@ -1,4 +1,3 @@
-
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
@@ -85,7 +84,8 @@ describe('integration: MCP stdio protocol', () => {
     const names = res.result.tools.map(t => t.name);
     const expected = ['create_automation', 'list_automations', 'delete_automation', 'get_automation_logs',
       'check_notifications', 'ack_notifications', 'set_webhook', 'get_pending_summary',
-      'run_task', 'get_task_status', 'list_tasks', 'delete_task'];
+      'run_task', 'get_task_status', 'list_tasks', 'delete_task',
+      'list_templates', 'instantiate_template'];
     for (const name of expected) {
       assert.ok(names.includes(name), 'Missing tool: ' + name);
     }
@@ -106,6 +106,32 @@ describe('integration: MCP stdio protocol', () => {
     const res = await readResponse(proc);
     assert.strictEqual(res.id, 4);
     assert.ok(res.result.content[0].text.includes('TestBuild'));
+  });
+
+  it('lists templates', async () => {
+    sendJsonRpc(proc, { jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'list_templates', arguments: {} } });
+    const res = await readResponse(proc);
+    assert.strictEqual(res.id, 40);
+    const text = res.result.content[0].text;
+    assert.ok(text.includes('build-project'));
+    assert.ok(text.includes('disk-check'));
+    assert.ok(text.includes('git-sync'));
+  });
+
+  it('instantiates a template', async () => {
+    sendJsonRpc(proc, {
+      jsonrpc: '2.0', id: 41, method: 'tools/call',
+      params: { name: 'instantiate_template', arguments: { templateId: 'build-project', name: 'MyBuild', intervalMinutes: 45, cwd: 'C:\\temp' } }
+    });
+    const res = await readResponse(proc);
+    assert.strictEqual(res.id, 41);
+    assert.ok(res.result.content[0].text.includes('Created automation'));
+    assert.ok(res.result.content[0].text.includes('from template build-project'));
+
+    // Verify it appears in list
+    sendJsonRpc(proc, { jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'list_automations', arguments: {} } });
+    const listRes = await readResponse(proc);
+    assert.ok(listRes.result.content[0].text.includes('MyBuild'));
   });
 
   it('runs a one-shot task', async () => {
@@ -148,48 +174,45 @@ describe('integration: MCP stdio protocol', () => {
     sendJsonRpc(proc, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'list_automations', arguments: {} } });
     const listRes = await readResponse(proc);
     const text = listRes.result.content[0].text;
-    // Find the first automation id in the JSON list
-    const match = text.match(/\"id\":\s*\"([a-z0-9]+)\"/);
+    const match = text.match(/"id":\s*"([a-z0-9]+)"/);
     assert.ok(match, 'No automation ID found in: ' + text);
     const id = match[1];
     sendJsonRpc(proc, { jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'delete_automation', arguments: { id } } });
     const delRes = await readResponse(proc);
     assert.strictEqual(delRes.id, 8);
-    assert.ok(delRes.result.content[0].text.includes("Deleted"));
-
-
+    assert.ok(delRes.result.content[0].text.includes('Deleted'));
   });
 
-it('rejects dangerous command via MCP', async () => {
-  sendJsonRpc(proc, {
-    jsonrpc: '2.0', id: 90, method: 'tools/call',
-    params: { name: 'run_task', arguments: { name: 'Evil', command: 'rm -rf /' } }
+  it('rejects dangerous command via MCP', async () => {
+    sendJsonRpc(proc, {
+      jsonrpc: '2.0', id: 90, method: 'tools/call',
+      params: { name: 'run_task', arguments: { name: 'Evil', command: 'rm -rf /' } }
+    });
+    const res = await readResponse(proc);
+    assert.strictEqual(res.id, 90);
+    assert.ok(res.result.content[0].text.includes('Security error'));
+    assert.ok(res.result.isError);
   });
-  const res = await readResponse(proc);
-  assert.strictEqual(res.id, 90);
-  assert.ok(res.result.content[0].text.includes('Security error'));
-  assert.ok(res.result.isError);
+
+  it('rejects dangerous script via MCP', async () => {
+    sendJsonRpc(proc, {
+      jsonrpc: '2.0', id: 91, method: 'tools/call',
+      params: { name: 'create_automation', arguments: { name: 'Evil', intervalMinutes: 60, script: `fs.rmSync("/", {recursive:true})`, scriptType: 'javascript' } }
+    });
+    const res = await readResponse(proc);
+    assert.strictEqual(res.id, 91);
+    assert.ok(res.result.content[0].text.includes('Security error'));
+    assert.ok(res.result.isError);
+  });
+
+  it('rejects forbidden cwd via MCP', async () => {
+    sendJsonRpc(proc, {
+      jsonrpc: '2.0', id: 92, method: 'tools/call',
+      params: { name: 'run_task', arguments: { name: 'Evil', cwd: 'C:\\Windows', command: 'echo hello' } }
+    });
+    const res = await readResponse(proc);
+    assert.strictEqual(res.id, 92);
+    assert.ok(res.result.content[0].text.includes('Security error'));
+    assert.ok(res.result.isError);
+  });
 });
-
-it('rejects dangerous script via MCP', async () => {
-  sendJsonRpc(proc, {
-    jsonrpc: '2.0', id: 91, method: 'tools/call',
-    params: { name: 'create_automation', arguments: { name: 'Evil', intervalMinutes: 60, script: `fs.rmSync("/", {recursive:true})`, scriptType: 'javascript' } }
-  });
-  const res = await readResponse(proc);
-  assert.strictEqual(res.id, 91);
-  assert.ok(res.result.content[0].text.includes('Security error'));
-  assert.ok(res.result.isError);
-});
-
-it('rejects forbidden cwd via MCP', async () => {
-  sendJsonRpc(proc, {
-    jsonrpc: '2.0', id: 92, method: 'tools/call',
-    params: { name: 'run_task', arguments: { name: 'Evil', cwd: 'C:\\\\Windows', command: 'echo hello' } }
-  });
-  const res = await readResponse(proc);
-  assert.strictEqual(res.id, 92);
-  assert.ok(res.result.content[0].text.includes('Security error'));
-  assert.ok(res.result.isError);
-});
-  });

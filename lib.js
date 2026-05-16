@@ -1,4 +1,3 @@
-
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -11,30 +10,114 @@ const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 const NOTIFICATIONS_FILE = path.join(DATA_DIR, 'notifications.jsonl');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const LAST_ACK_FILE = path.join(DATA_DIR, 'last_ack.json');
+const TEMPLATES_FILE = path.join(DATA_DIR, 'templates.json');
+
+const MAX_NOTIFICATIONS_BYTES = 512 * 1024;
+const KEEP_NOTIFICATION_LINES = 250;
+const TAIL_BYTES = 128 * 1024;
 
 function ensureDirs() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   if (!fs.existsSync(SCRIPTS_DIR)) fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 }
 
-let automations = [];
-let tasks = [];
-let config = {};
+// Opt 1: Maps for O(1) lookup by id
+const automationsMap = new Map();
+const tasksMap = new Map();
+const config = {};
 let lastAck = 0;
+
+// Built-in automation templates
+const BUILTIN_TEMPLATES = [
+  {
+    id: 'build-project',
+    name: 'Build project',
+    description: 'Run dotnet build in a project directory every N minutes.',
+    defaultInterval: 60,
+    scriptType: 'powershell',
+    command: 'dotnet build'
+  },
+  {
+    id: 'disk-check',
+    name: 'Disk space check',
+    description: 'Check available disk space every N minutes.',
+    defaultInterval: 5,
+    scriptType: 'powershell',
+    command: 'Get-PSDrive C | Select-Object Used,Free'
+  },
+  {
+    id: 'git-sync',
+    name: 'Git sync',
+    description: 'Pull latest changes from git remote every N minutes.',
+    defaultInterval: 30,
+    scriptType: 'powershell',
+    command: 'git pull'
+  }
+];
+
+let templates = [];
+
+function loadTemplates() {
+  templates = [...BUILTIN_TEMPLATES];
+  if (fs.existsSync(TEMPLATES_FILE)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8'));
+      if (Array.isArray(data)) {
+        for (const t of data) {
+          const idx = templates.findIndex(x => x.id === t.id);
+          if (idx >= 0) templates[idx] = t;
+          else templates.push(t);
+        }
+      }
+    } catch {}
+  }
+}
+
+function listTemplates() { return [...templates]; }
+function getTemplate(id) { return templates.find(t => t.id === id); }
+function interpolateTemplate(t, params) {
+  let command = t.command || null;
+  let script = t.script || null;
+  if (params && typeof params === 'object') {
+    for (const [k, v] of Object.entries(params)) {
+      const placeholder = '${' + k + '}';
+      if (command) command = command.split(placeholder).join(String(v));
+      if (script) script = script.split(placeholder).join(String(v));
+    }
+  }
+  return { command, script };
+}
+
+// Opt 5: write to .tmp then rename for atomicity
+function atomicWrite(filePath, content) {
+  const tmp = filePath + '.tmp';
+  try {
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    throw err;
+  }
+}
+
+// Opt 4: never crash the process on write failure
+function safeWrite(filePath, content) {
+  try { atomicWrite(filePath, content); } catch {}
+}
 
 function loadState() {
   if (fs.existsSync(AUTOMATIONS_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(AUTOMATIONS_FILE, 'utf8'));
-      automations.length = 0;
-      automations.push(...data);
+      automationsMap.clear();
+      for (const a of data) automationsMap.set(a.id, a);
     } catch {}
   }
   if (fs.existsSync(TASKS_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(TASKS_FILE, 'utf8'));
-      tasks.length = 0;
-      tasks.push(...data);
+      tasksMap.clear();
+      for (const t of data) tasksMap.set(t.id, t);
     } catch {}
   }
   if (fs.existsSync(CONFIG_FILE)) {
@@ -49,33 +132,86 @@ function loadState() {
   }
 }
 
+// Opt 1: CRUD helpers for automations
+function getAutomation(id) { return automationsMap.get(id); }
+function addAutomation(a) { automationsMap.set(a.id, a); }
+function removeAutomation(id) { return automationsMap.delete(id); }
+function listAutomations() { return [...automationsMap.values()]; }
+
+// Opt 1: CRUD helpers for tasks
+function getTask(id) { return tasksMap.get(id); }
+function addTask(t) { tasksMap.set(t.id, t); }
+function removeTask(id) { return tasksMap.delete(id); }
+function listTasks() { return [...tasksMap.values()]; }
+
 function save() {
-  fs.writeFileSync(AUTOMATIONS_FILE, JSON.stringify(automations, null, 2));
+  safeWrite(AUTOMATIONS_FILE, JSON.stringify(listAutomations(), null, 2));
 }
 
 function saveTasks() {
-  fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+  safeWrite(TASKS_FILE, JSON.stringify(listTasks(), null, 2));
 }
 
 function saveConfig() {
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  safeWrite(CONFIG_FILE, JSON.stringify(config, null, 2));
 }
 
 function saveAck() {
-  fs.writeFileSync(LAST_ACK_FILE, JSON.stringify({ timestamp: lastAck }, null, 2));
+  safeWrite(LAST_ACK_FILE, JSON.stringify({ timestamp: lastAck }, null, 2));
+}
+
+// Opt 3: rotate notifications.jsonl when it exceeds MAX_NOTIFICATIONS_BYTES
+function rotateNotificationsIfNeeded() {
+  try {
+    const stat = fs.statSync(NOTIFICATIONS_FILE);
+    if (stat.size <= MAX_NOTIFICATIONS_BYTES) return;
+    const content = fs.readFileSync(NOTIFICATIONS_FILE, 'utf8');
+    const lines = content.split('\n').filter(Boolean);
+    const keep = lines.slice(-KEEP_NOTIFICATION_LINES).join('\n') + '\n';
+    safeWrite(NOTIFICATIONS_FILE, keep);
+  } catch {}
 }
 
 function appendNotification(record) {
   const line = JSON.stringify(record) + '\n';
-  fs.appendFileSync(NOTIFICATIONS_FILE, line);
+  try {
+    fs.appendFileSync(NOTIFICATIONS_FILE, line);
+    rotateNotificationsIfNeeded();
+  } catch {}
 }
 
+// Opt 2: tail-based read — skips loading the full file when it is large
 function readNotifications(since = null, limit = 50) {
   if (!fs.existsSync(NOTIFICATIONS_FILE)) return [];
-  const lines = fs.readFileSync(NOTIFICATIONS_FILE, 'utf8').split('\n').filter(Boolean);
-  let results = lines.map(l => JSON.parse(l));
-  if (since) results = results.filter(r => r.timestamp > since);
-  return results.slice(-limit);
+  try {
+    const stat = fs.statSync(NOTIFICATIONS_FILE);
+    const fileSize = stat.size;
+    if (fileSize === 0) return [];
+
+    let text;
+    if (fileSize > TAIL_BYTES) {
+      const buf = Buffer.alloc(TAIL_BYTES);
+      const fd = fs.openSync(NOTIFICATIONS_FILE, 'r');
+      try {
+        fs.readSync(fd, buf, 0, TAIL_BYTES, fileSize - TAIL_BYTES);
+      } finally {
+        fs.closeSync(fd);
+      }
+      // Drop the first (potentially partial) line since we started mid-file
+      text = buf.toString('utf8').replace(/^[^\n]*\n/, '');
+    } else {
+      text = fs.readFileSync(NOTIFICATIONS_FILE, 'utf8');
+    }
+
+    const lines = text.split('\n').filter(Boolean);
+    let results = lines
+      .map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(Boolean);
+    if (since !== null) results = results.filter(r => r.timestamp > since);
+    return results.slice(-limit);
+  } catch {
+    return [];
+  }
 }
 
 function getPendingCount() {
@@ -114,8 +250,8 @@ function resolveCommand(a) {
 
 function resetState() {
   try { fs.unlinkSync(NOTIFICATIONS_FILE); } catch {}
-  automations.length = 0;
-  tasks.length = 0;
+  automationsMap.clear();
+  tasksMap.clear();
   Object.keys(config).forEach(k => delete config[k]);
   lastAck = 0;
 }
@@ -202,7 +338,10 @@ function validateTask(args) {
 const api = {
   DATA_DIR, SCRIPTS_DIR, AUTOMATIONS_FILE, TASKS_FILE, NOTIFICATIONS_FILE, CONFIG_FILE, LAST_ACK_FILE,
   ensureDirs, loadState, resetState,
-  automations, tasks, config,
+  getAutomation, addAutomation, removeAutomation, listAutomations,
+  getTask, addTask, removeTask, listTasks,
+  loadTemplates, listTemplates, getTemplate, interpolateTemplate,
+  config,
   save, saveTasks, saveConfig, saveAck,
   appendNotification, readNotifications, getPendingCount,
   sendHttpNotification, resolveCommand,

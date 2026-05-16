@@ -32,14 +32,14 @@ describe('scheduler tick simulation', () => {
 
   it('fires automation when nextRun is in the past', () => {
     const now = Date.now();
-    lib.automations.push({
+    lib.addAutomation({
       id: 'sched1', name: 'Quick', intervalMinutes: 1,
       nextRun: now - 1000, // already due
       logs: [],
       command: 'echo scheduler-test'
     });
     // Simulate tick: if now >= nextRun, advance nextRun
-    for (const a of lib.automations) {
+    for (const a of lib.listAutomations()) {
       if (now >= a.nextRun) {
         a.nextRun = now + a.intervalMinutes * 60 * 1000;
         // In real server it would exec here; we simulate by pushing a log
@@ -47,41 +47,43 @@ describe('scheduler tick simulation', () => {
       }
     }
     lib.save();
-    assert.strictEqual(lib.automations[0].logs.length, 1);
-    assert.ok(lib.automations[0].nextRun > now);
+    const a = lib.getAutomation('sched1');
+    assert.strictEqual(a.logs.length, 1);
+    assert.ok(a.nextRun > now);
   });
 
   it('does not fire automation when nextRun is in the future', () => {
     const now = Date.now();
     lib.resetState();
-    lib.automations.push({
+    lib.addAutomation({
       id: 'sched2', name: 'Future', intervalMinutes: 10,
       nextRun: now + 600000, // 10 min from now
       logs: []
     });
     let fired = false;
-    for (const a of lib.automations) {
+    for (const a of lib.listAutomations()) {
       if (now >= a.nextRun) {
         fired = true;
         a.logs.push({ time: new Date().toISOString(), exitCode: 0, stdout: '', stderr: '' });
       }
     }
     assert.strictEqual(fired, false);
-    assert.strictEqual(lib.automations[0].logs.length, 0);
+    assert.strictEqual(lib.getAutomation('sched2').logs.length, 0);
   });
 
   it('caps log history at 100 entries', () => {
     lib.resetState();
-    lib.automations.push({ id: 'sched3', name: 'Logger', intervalMinutes: 1, nextRun: 0, logs: [] });
+    lib.addAutomation({ id: 'sched3', name: 'Logger', intervalMinutes: 1, nextRun: 0, logs: [] });
+    const a = lib.getAutomation('sched3');
     for (let i = 0; i < 105; i++) {
-      lib.automations[0].logs.push({ time: i, exitCode: 0, stdout: '', stderr: '' });
-      if (lib.automations[0].logs.length > 100) {
-        lib.automations[0].logs.shift();
+      a.logs.push({ time: i, exitCode: 0, stdout: '', stderr: '' });
+      if (a.logs.length > 100) {
+        a.logs.shift();
       }
     }
-    assert.strictEqual(lib.automations[0].logs.length, 100);
-    assert.strictEqual(lib.automations[0].logs[0].time, 5);
-    assert.strictEqual(lib.automations[0].logs[99].time, 104);
+    assert.strictEqual(a.logs.length, 100);
+    assert.strictEqual(a.logs[0].time, 5);
+    assert.strictEqual(a.logs[99].time, 104);
   });
 
   it('writes inline scripts before exec simulation', () => {
