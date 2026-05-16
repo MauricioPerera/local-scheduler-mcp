@@ -218,7 +218,7 @@ describe('security validation', () => {
   });
 
   it('allows repo directory', () => {
-    const result = lib.validateCwd('D:\\\\repos\\\\games123');
+    const result = lib.validateCwd('C:\\\\temp\\\\my-project');
     assert.strictEqual(result.ok, true);
   });
 
@@ -307,4 +307,8 @@ describe('security validation', () => {
     });
   });
 });
+
+
+
+
 

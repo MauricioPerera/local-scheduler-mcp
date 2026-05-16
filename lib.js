@@ -341,14 +341,15 @@ function validateCwd(cwd) {
       return { ok: false, reason: 'Working directory blocked by security policy: ' + normalized };
     }
   }
+  const extraDirs = (process.env.SCHEDULER_ALLOWED_DIRS || '').split(';').filter(Boolean).map(d => path.resolve(d).toLowerCase());
   const allowedRoots = [
     userHome,
     path.join(userHome, '.codex'),
-    path.resolve('D:/repos').toLowerCase(),
     path.resolve('C:/temp').toLowerCase(),
     path.resolve('C:/tmp').toLowerCase(),
     path.join(userHome, 'documents').toLowerCase(),
-    path.join(userHome, 'desktop').toLowerCase()
+    path.join(userHome, 'desktop').toLowerCase(),
+    ...extraDirs
   ];
   const isAllowed = allowedRoots.some(root => normalized.startsWith(root));
   if (!isAllowed) {

@@ -50,7 +50,7 @@ Built-in templates:
 
 Templates support `${key}` interpolation. Pass `params` as JSON string:
 ```json
-{"repoPath": "D:/repos/SnakeGame"}
+{"repoPath": "D:/repos/my-project"}
 ```
 
 Templates can define `requiredParams`. Missing required values return an error before execution.
@@ -79,9 +79,18 @@ Five layers:
 
 1. **Command blocklist**: `rm -rf /`, `format`, `curl | sh`, etc.
 2. **Script blocklist**: Dangerous JS/Python/PowerShell patterns.
-3. **CWD allowlist**: Only user home, `~/.codex`, `D:/repos`, `C:/temp`.
+3. **CWD allowlist**: User home, `~/.codex`, `C:/temp`, `C:/tmp`, and any directories set in `SCHEDULER_ALLOWED_DIRS` env var (semicolon-separated).
 4. **Template interpolation hardening** (v3.1.1+): Interpolated values must match `^[a-zA-Z0-9_\-/: .~]+$`. Shell metacharacters (`;`, `|`, `&`, `$`, quotes, etc.) are rejected.
 5. **Required params** (v3.1.1+): Templates can declare `requiredParams`. Missing values produce a clear error instead of sending `${key}` literal to the shell.
+
+## Environment Variables
+
+| Variable | Purpose |
+|---|---|
+| `SCHEDULER_TEST_DIR` | Override data directory for tests |
+| `SCHEDULER_ALLOWED_DIRS` | Semicolon-separated list of additional allowed working directories |
+| `SCHEDULER_WEBHOOK_URL` | Default webhook URL for notifications |
+| `CODEX_HOME` | Base directory for `~/.codex` fallback |
 
 ## Persistence
 
