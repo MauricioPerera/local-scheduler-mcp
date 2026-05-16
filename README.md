@@ -20,7 +20,7 @@ npm install
 node server.js
 ```
 
-Data directory: `~/.codex/local-scheduler/` (or `SCHEDULER_TEST_DIR` during tests).
+Data directory: `~/.codex/local-scheduler/` (or `$CODEX_HOME/local-scheduler` if set, or `SCHEDULER_TEST_DIR` during tests).
 
 ## Tools (14)
 
@@ -45,7 +45,7 @@ Built-in templates:
 | ID | Default Command | Interval | Use |
 |---|---|---|---|
 | `build-project` | `dotnet build` | 60 min | Build .NET projects |
-| `disk-check` | `Get-PSDrive C` | 5 min | Monitor disk space |
+| `disk-check` | `Get-PSDrive C | Select-Object Used,Free` | 5 min | Monitor disk space |
 | `git-sync` | `git pull` | 30 min | Keep repo synced |
 
 Templates support `${key}` interpolation. Pass `params` as JSON string:
@@ -75,7 +75,7 @@ Templates can define `requiredParams`. Missing required values return an error b
 
 ## Security
 
-Three layers:
+Five layers:
 
 1. **Command blocklist**: `rm -rf /`, `format`, `curl | sh`, etc.
 2. **Script blocklist**: Dangerous JS/Python/PowerShell patterns.
@@ -107,7 +107,7 @@ npm test
 - Secure template interpolation: blocks shell metacharacters in `${key}` values
 - Required params validation in templates
 - JSON.parse error handling in `instantiate_template`
-- 3 new unit tests + 2 integration tests
+- 3 new unit tests + 2 integration tests (54 total)
 
 ### v3.1.0
 - Automation templates system (built-in + custom via `templates.json`)

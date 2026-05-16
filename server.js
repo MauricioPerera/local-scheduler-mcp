@@ -26,7 +26,7 @@ loadTemplates();
 const TASK_ALLOWED = { execution: { taskSupport: 'allowed' } };
 
 const server = new McpServer(
-  { name: 'local-scheduler', version: '3.1.0' },
+  { name: 'local-scheduler', version: '3.1.1' },
   { capabilities: { tools: {} } }
 );
 
@@ -347,5 +347,5 @@ setInterval(() => {
 
 const transport = new StdioServerTransport();
 server.connect(transport).then(() => {
-  console.error('Local Scheduler MCP v3.1.0 started on stdio');
+  console.error('Local Scheduler MCP v3.1.1 started on stdio');
 });
